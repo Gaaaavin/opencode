@@ -1,5 +1,6 @@
 import type { IntegrationOAuthMethodRegistration } from "@opencode/plugin/effect/integration"
 import { define } from "@opencode/plugin/effect/plugin"
+import { Money } from "@opencode/schema/money"
 import { Deferred, Effect, Option, Schema, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { Server } from "node:http"
@@ -304,8 +305,8 @@ export const OpenAIPlugin = define({
     })
     yield* ctx.model.transform((models) => {
       for (const model of models.list(Provider.ID.openai)) {
-        // ChatGPT-plan tokens only authorize codex-eligible models, and the
-        // subscription covers usage, so hide the rest and zero the cost.
+        // ChatGPT-plan tokens only authorize codex-eligible models. Keep catalog
+        // prices for API-equivalent usage accounting in this fork.
         models.update(model.providerID, model.id, (draft) => {
           if (!chatgpt) return
           if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(draft.body?.reasoning)) {
@@ -323,7 +324,6 @@ export const OpenAIPlugin = define({
             draft.enabled = false
             return
           }
-          draft.cost = []
           // Match Codex CLI so context consumption and subscription usage stay consistent between clients.
           draft.limit = { ...draft.limit, context: 400_000, input: 272_000 }
         })
@@ -340,6 +340,16 @@ export const OpenAIPlugin = define({
             modelID: apiID,
             name: `${model.name} Ultrafast`,
             body: { ...model.body, service_tier: "ultrafast" },
+            // Ultrafast is 6x Standard, including context tiers: https://developers.openai.com/api/docs/pricing
+            cost: model.cost.map((cost) => ({
+              ...cost,
+              input: Money.USDPerMillionTokens.make(cost.input * 6),
+              output: Money.USDPerMillionTokens.make(cost.output * 6),
+              cache: {
+                read: Money.USDPerMillionTokens.make(cost.cache.read * 6),
+                write: Money.USDPerMillionTokens.make(cost.cache.write * 6),
+              },
+            })),
           })
         })
       }

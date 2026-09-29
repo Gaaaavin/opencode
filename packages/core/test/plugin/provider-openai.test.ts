@@ -26,11 +26,40 @@ import { AbsolutePath } from "@opencode/core/schema"
 import { SessionModelRequest } from "@opencode/core/session/model-request"
 import { SessionModelTransport } from "@opencode/core/session/model-transport"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
+import { SessionUsage } from "@opencode/core/session/usage"
 import { testEffect } from "../lib/effect"
 import { drain } from "../lib/clock"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
+
+const astraCost = [
+  {
+    input: Money.USDPerMillionTokens.make(10),
+    output: Money.USDPerMillionTokens.make(50),
+    cache: { read: Money.USDPerMillionTokens.make(1), write: Money.USDPerMillionTokens.make(12.5) },
+  },
+  {
+    tier: { type: "context", size: 272_000 },
+    input: Money.USDPerMillionTokens.make(20),
+    output: Money.USDPerMillionTokens.make(75),
+    cache: { read: Money.USDPerMillionTokens.make(2), write: Money.USDPerMillionTokens.make(25) },
+  },
+] satisfies Model.Info["cost"]
+
+const astraFastCost = [
+  {
+    input: Money.USDPerMillionTokens.make(20),
+    output: Money.USDPerMillionTokens.make(100),
+    cache: { read: Money.USDPerMillionTokens.make(2), write: Money.USDPerMillionTokens.make(25) },
+  },
+  {
+    tier: { type: "context", size: 272_000 },
+    input: Money.USDPerMillionTokens.make(40),
+    output: Money.USDPerMillionTokens.make(150),
+    cache: { read: Money.USDPerMillionTokens.make(4), write: Money.USDPerMillionTokens.make(50) },
+  },
+] satisfies Model.Info["cost"]
 
 const emptyCatalog = HttpClient.make((request) =>
   Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ models: [] }))),
@@ -206,7 +235,7 @@ describe("OpenAIPlugin", () => {
     for (const mode of [undefined, "priority", "ultrafast", "provider-body", "model-body"]) {
       if (method === "key" && mode === "ultrafast") continue
       const tier = mode === "provider-body" || mode === "model-body" ? "ultrafast" : mode
-      it.effect(`prepares output caps for ${method} ${mode ?? "standard"} on HTTP and WebSocket`, () =>
+      it.effect(`prices and prepares ${method} ${mode ?? "standard"} on HTTP and WebSocket`, () =>
         Effect.gen(function* () {
           const catalog = yield* Provider.Service
           const models = yield* Model.Service
@@ -230,6 +259,7 @@ describe("OpenAIPlugin", () => {
               (draft) => {
                 draft.modelID = Model.ID.make("gpt-6-astra")
                 draft.name = "GPT-6 Astra"
+                draft.cost = structuredClone(mode === "priority" ? astraFastCost : astraCost)
                 draft.limit = { context: 1_050_000, output: 128_000 }
                 draft.body = tier === "priority" ? { service_tier: "priority" } : {}
               },
@@ -301,10 +331,46 @@ describe("OpenAIPlugin", () => {
           expect(required(yield* models.get(Provider.ID.openai, id)).limit.output).toBe(128_000)
           expect(String(model.model.id)).toBe("gpt-6-astra")
           if (mode === "ultrafast") {
+            expect(required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-6-astra"))).cost).toEqual(
+              astraCost,
+            )
             expect(required(yield* models.get(Provider.ID.openai, id)).name).toBe("GPT-6 Astra Ultrafast")
-            expect(model.cost).toEqual([])
+            expect(model.cost).toEqual([
+              {
+                input: Money.USDPerMillionTokens.make(60),
+                output: Money.USDPerMillionTokens.make(300),
+                cache: { read: Money.USDPerMillionTokens.make(6), write: Money.USDPerMillionTokens.make(75) },
+              },
+              {
+                tier: { type: "context", size: 272_000 },
+                input: Money.USDPerMillionTokens.make(120),
+                output: Money.USDPerMillionTokens.make(450),
+                cache: { read: Money.USDPerMillionTokens.make(12), write: Money.USDPerMillionTokens.make(150) },
+              },
+            ])
+            expect(
+              Number(
+                SessionUsage.calculateCost(model.cost, {
+                  input: 270_000,
+                  output: 1000,
+                  reasoning: 1000,
+                  cache: { read: 1000, write: 1000 },
+                }),
+              ),
+            ).toBeCloseTo(16.881)
+            expect(
+              Number(
+                SessionUsage.calculateCost(model.cost, {
+                  input: 270_001,
+                  output: 1000,
+                  reasoning: 1000,
+                  cache: { read: 1000, write: 1000 },
+                }),
+              ),
+            ).toBeCloseTo(33.46212)
             expect(model.limit).toEqual({ context: 400_000, input: 272_000, output: 128_000 })
           }
+          if (mode !== "ultrafast") expect(model.cost).toEqual(mode === "priority" ? astraFastCost : astraCost)
           if (method === "key")
             expect(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-6-astra-ultrafast"))).toBeUndefined()
           const requests = yield* SessionModelRequest.Service
@@ -499,7 +565,13 @@ describe("OpenAIPlugin", () => {
       const eligible = required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-5.5")))
       expect(eligible.package).toBe("@opencode/ai/providers/openai")
       expect(eligible.headers).toMatchObject({ originator: "opencode", "chatgpt-account-id": "acct_123" })
-      expect(eligible.cost).toEqual([])
+      expect(eligible.cost).toEqual([
+        {
+          input: Money.USDPerMillionTokens.make(1),
+          output: Money.USDPerMillionTokens.make(2),
+          cache: { read: Money.USDPerMillionTokens.make(0.1), write: Money.USDPerMillionTokens.zero },
+        },
+      ])
       expect(eligible.limit).toEqual({ context: 400_000, input: 272_000, output: 128_000 })
       expect(eligible.enabled).toBe(true)
       expect(required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-5.5-pro"))).enabled).toBe(false)
