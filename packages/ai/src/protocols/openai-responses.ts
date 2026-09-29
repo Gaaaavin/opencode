@@ -323,12 +323,37 @@ const auth = Auth.none
 
 export const httpTransport = HttpTransport.sseJson.with<OpenAIResponsesBody>()
 export const channelTransport = OpenResponsesChannel.transport<OpenAIResponsesBody>
-export const transport = channelTransport({
+const channel = channelTransport({
   id: ADAPTER,
   name: NAME,
   rotateAfterMs: WEBSOCKET_ROTATE_AFTER_MS,
   headers: (headers) => Headers.set(headers, "openai-beta", headers["openai-beta"] ?? WEBSOCKET_PROTOCOL_HEADER),
 })
+export const transport: typeof channel = {
+  ...channel,
+  prepare: (input) => {
+    const url = Endpoint.render(input.endpoint, { request: input.request, body: input.body })
+    if (url.origin !== "https://chatgpt.com" || !url.pathname.startsWith("/backend-api/codex/"))
+      return channel.prepare(input)
+    // Codex rejects output caps, including raw body overrides, on both HTTP and WebSocket requests.
+    const { max_output_tokens: _maxOutputTokens, ...body } = input.request.http?.body ?? {}
+    const tier = body.service_tier ?? input.body.service_tier
+    return channel.prepare({
+      ...input,
+      body: { ...input.body, max_output_tokens: undefined },
+      request: LLMRequest.update(input.request, {
+        http: {
+          ...input.request.http,
+          body,
+          headers: {
+            ...input.request.http?.headers,
+            ...(typeof tier === "string" ? { "x-codex-routing-hint": `model=${input.body.model};tier=${tier}` } : {}),
+          },
+        },
+      }),
+    })
+  },
+}
 
 export const route = Route.make({
   compact: { endpoint: ResponsesCompaction.make(adapter), trigger: ResponsesCheckpoint.make(checkpointBody) },

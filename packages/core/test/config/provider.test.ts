@@ -34,6 +34,25 @@ function required<T>(value: T | undefined): T {
 const decode = Schema.decodeUnknownSync(Info)
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.effect("keeps V2 body and modelID fields under providers, not the legacy provider key", () =>
+    Effect.sync(() => {
+      const openai = {
+        body: { service_tier: "ultrafast" },
+        models: { "gpt-6-astra-custom": { modelID: "gpt-6-astra", body: { service_tier: "ultrafast" } } },
+      }
+      const native = ConfigNormalize.normalize({ providers: { openai } })
+      const legacy = ConfigNormalize.normalize({ provider: { openai } })
+      expect(native.type).toBe("normalized")
+      expect(legacy.type).toBe("normalized")
+      if (native.type !== "normalized" || legacy.type !== "normalized") throw new Error("Expected normalized config")
+      expect(decode(native.encoded).providers?.openai).toMatchObject(openai)
+      const migrated = decode(legacy.encoded).providers?.openai
+      expect(migrated?.body).toBeUndefined()
+      expect(migrated?.models?.["gpt-6-astra-custom"]?.body).toBeUndefined()
+      expect(migrated?.models?.["gpt-6-astra-custom"]?.modelID).toBeUndefined()
+    }),
+  )
+
   it.effect("inherits the provider compaction setting with model overrides and rejects unsupported routes", () =>
     Effect.gen(function* () {
       const models = yield* Model.Service
@@ -48,7 +67,10 @@ describe("ConfigProviderPlugin.Plugin", () => {
                 settings: { compaction: { type: "native" } },
                 models: {
                   native: {},
-                  local: { settings: { compaction: { type: "summary" } }, package: "@opencode/ai/providers/openai/chat" },
+                  local: {
+                    settings: { compaction: { type: "summary" } },
+                    package: "@opencode/ai/providers/openai/chat",
+                  },
                   unsupported: { package: "@opencode/ai/providers/openai/chat" },
                 },
               },

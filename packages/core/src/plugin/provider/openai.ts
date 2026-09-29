@@ -1,6 +1,7 @@
 import type { IntegrationOAuthMethodRegistration } from "@opencode/plugin/effect/integration"
 import { define } from "@opencode/plugin/effect/plugin"
 import { Deferred, Effect, Option, Schema, Semaphore, Stream } from "effect"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { Server } from "node:http"
 import { App } from "../../app.js"
 import { Credential } from "../../credential.js"
@@ -23,6 +24,14 @@ const headlessMethodID = Integration.MethodID.make("chatgpt-headless")
 // ChatGPT accounts lost gpt-5.4 and gpt-5.4-mini in Codex on 2026-08-31 (replacements: gpt-5.6-terra, gpt-5.6-luna).
 const codexAllowed = new Set(["gpt-5.5", "gpt-5.3-codex-spark"])
 const codexDisallowed = new Set(["gpt-5.5-pro", "gpt-5.6"])
+const CodexModels = Schema.Struct({
+  models: Schema.Array(
+    Schema.Struct({
+      slug: Schema.String,
+      service_tiers: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.String }))),
+    }),
+  ),
+})
 
 type Pkce = {
   verifier: string
@@ -231,8 +240,10 @@ export const OpenAIPlugin = define({
   id: "opencode.provider.openai",
   effect: Effect.fn(function* (ctx) {
     const bus = yield* Bus.Service
+    const http = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
     const loading = Semaphore.makeUnsafe(1)
     let chatgpt: Credential.OAuth | undefined
+    let ultrafast = new Set<string>()
 
     const load = Effect.fn("OpenAIPlugin.load")(function* () {
       const connection = yield* ctx.integration.connection.active("openai")
@@ -244,6 +255,29 @@ export const OpenAIPlugin = define({
         (credential.methodID === browserMethodID || credential.methodID === headlessMethodID)
           ? credential
           : undefined
+      ultrafast = new Set()
+      if (!chatgpt) return
+      const account = chatgpt.metadata?.accountID
+      const catalog = yield* http
+        .execute(
+          HttpClientRequest.get(`${codexBaseURL}/models?client_version=0.300.0`).pipe(
+            HttpClientRequest.bearerToken(chatgpt.access),
+            HttpClientRequest.setHeaders({
+              originator: "opencode",
+              ...(typeof account === "string" ? { "chatgpt-account-id": account } : {}),
+            }),
+          ),
+        )
+        .pipe(
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(CodexModels)),
+          Effect.timeout("2 seconds"),
+          Effect.catch(() => Effect.logWarning("Failed to discover ChatGPT service tiers").pipe(Effect.as(undefined))),
+        )
+      ultrafast = new Set(
+        catalog?.models
+          .filter((model) => model.service_tiers?.some((tier) => tier.id === "ultrafast"))
+          .map((model) => model.slug),
+      )
     })
 
     yield* ctx.integration.transform((editor) => {
@@ -292,6 +326,21 @@ export const OpenAIPlugin = define({
           draft.cost = []
           // Match Codex CLI so context consumption and subscription usage stay consistent between clients.
           draft.limit = { ...draft.limit, context: 400_000, input: 272_000 }
+        })
+      }
+      if (!chatgpt) return
+      for (const model of models.list(Provider.ID.openai)) {
+        const apiID = model.modelID ?? model.id
+        if (!model.enabled || model.id !== apiID || !ultrafast.has(apiID)) continue
+        const id = `${model.id}-ultrafast`
+        if (models.get(Provider.ID.openai, id)) continue
+        models.update(Provider.ID.openai, id, (draft) => {
+          Object.assign(draft, structuredClone(model), {
+            id,
+            modelID: apiID,
+            name: `${model.name} Ultrafast`,
+            body: { ...model.body, service_tier: "ultrafast" },
+          })
         })
       }
     })
