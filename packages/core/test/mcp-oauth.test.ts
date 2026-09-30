@@ -40,6 +40,7 @@ const memoryCredentials = (initial: Credential.Info[]) => {
     all: unused,
     create: unused,
     activate: unused,
+    compareAndSet: unused,
     list: (id) => Effect.sync(() => Array.from(rows.values()).filter((row) => row.integrationID === id)),
     get: (id) => Effect.sync(() => rows.get(id)),
     update: (id, updates) =>

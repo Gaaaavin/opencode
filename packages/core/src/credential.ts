@@ -1,6 +1,6 @@
 export * as Credential from "./credential.js"
 
-import { asc, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq } from "drizzle-orm"
 import { Cause, Context, Effect, Layer, Schema } from "effect"
 import { Credential } from "@opencode/schema/credential"
 import { Integration } from "@opencode/schema/integration"
@@ -48,6 +48,8 @@ export interface Interface {
   readonly activate: (id: ID) => Effect.Effect<void>
   /** Updates the label or secret value of a stored credential. */
   readonly update: (id: ID, updates: Partial<Pick<Info, "label" | "value">>) => Effect.Effect<void>
+  /** Atomically replaces a secret only while its integration and value still match. */
+  readonly compareAndSet: (expected: Info, value: Value) => Effect.Effect<Value | undefined>
   /** Removes a stored credential. */
   readonly remove: (id: ID) => Effect.Effect<void>
 }
@@ -182,6 +184,29 @@ const layer = Layer.effect(
           yield* Effect.logInfo("credential activated", { integrationID, credentialID: id })
           yield* bus.publish(Event.Switched, { integrationID, credentialID: id }, { global: true })
         }
+      }),
+      compareAndSet: Effect.fn("Credential.compareAndSet")(function* (expected, value) {
+        const updated = yield* db
+          .update(CredentialTable)
+          .set({ value })
+          .where(
+            and(
+              eq(CredentialTable.id, expected.id),
+              eq(CredentialTable.integration_id, expected.integrationID),
+              eq(CredentialTable.value, expected.value),
+            ),
+          )
+          .returning({ value: CredentialTable.value })
+          .get()
+          .pipe(Effect.orDie)
+        if (updated) return decode(updated.value)
+        const current = yield* db
+          .select()
+          .from(CredentialTable)
+          .where(eq(CredentialTable.id, expected.id))
+          .get()
+          .pipe(Effect.orDie)
+        return current ? stored(current)?.value : undefined
       }),
       update: Effect.fn("Credential.update")(function* (id, updates) {
         if (updates.label === undefined && updates.value === undefined) return

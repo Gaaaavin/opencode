@@ -52,6 +52,7 @@ import { ReadToolFileSystem } from "./tool/read-filesystem.js"
 import { Tool } from "./tool.js"
 import { ToolOutput } from "./tool-output.js"
 import { Vcs } from "./vcs.js"
+import { ForkSubscriptionUsage } from "./fork-subscription-usage.js"
 
 export * as Instance from "./instance.js"
 export { Service, node, type Interface } from "./instance/service.js"
@@ -67,6 +68,7 @@ const nodes = [
   Rpc.node,
   WebSearch.node,
   Integration.node,
+  ForkSubscriptionUsage.node,
   Provider.node,
   Model.node,
   ModelResolver.node,

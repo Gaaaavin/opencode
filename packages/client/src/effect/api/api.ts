@@ -1668,6 +1668,45 @@ export interface IntegrationApi<E = never> {
   }
 }
 
+export type ServerForkSubscriptionUsageForkSubscriptionUsageInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
+}
+export type ServerForkSubscriptionUsageForkSubscriptionUsageOutput = {
+  readonly providers: readonly [
+    {
+      readonly providerID: "openai"
+      readonly status:
+        | "ok"
+        | "not_connected"
+        | "unsupported_auth"
+        | "auth_required"
+        | "unavailable"
+        | "rate_limited"
+        | "error"
+      readonly windows: ReadonlyArray<{
+        readonly id: string
+        readonly label: string
+        readonly usedPercent: number
+        readonly remainingPercent: number
+        readonly resetsAt?: number | undefined
+        readonly windowSeconds?: number | undefined
+      }>
+      readonly plan?: string | undefined
+      readonly updatedAt?: number | undefined
+      readonly stale: boolean
+      readonly message?: string | undefined
+      readonly retryAt?: number | undefined
+    },
+  ]
+}
+export type ServerForkSubscriptionUsageForkSubscriptionUsageOperation<E = never> = (
+  input?: ServerForkSubscriptionUsageForkSubscriptionUsageInput,
+) => Effect.Effect<ServerForkSubscriptionUsageForkSubscriptionUsageOutput, E>
+
+export interface ServerForkSubscriptionUsageApi<E = never> {
+  readonly fork: { readonly subscriptionUsage: ServerForkSubscriptionUsageForkSubscriptionUsageOperation<E> }
+}
+
 export type McpListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
 export type McpListOutput = { readonly location: Location.PublicRef; readonly data: ReadonlyArray<Mcp.Server> }
 export type McpListOperation<E = never> = (input?: McpListInput) => Effect.Effect<McpListOutput, E>
@@ -2342,6 +2381,7 @@ export interface AppApi<E = never> {
   readonly generate: GenerateApi<E>
   readonly provider: ProviderApi<E>
   readonly integration: IntegrationApi<E>
+  readonly "server.forkSubscriptionUsage": ServerForkSubscriptionUsageApi<E>
   readonly mcp: McpApi<E>
   readonly credential: CredentialApi<E>
   readonly project: ProjectApi<E>

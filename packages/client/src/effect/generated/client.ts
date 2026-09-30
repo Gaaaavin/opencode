@@ -139,6 +139,8 @@ import type {
   IntegrationCommandStatusOutput,
   IntegrationCommandCancelInput,
   IntegrationCommandCancelOutput,
+  ServerForkSubscriptionUsageForkSubscriptionUsageInput,
+  ServerForkSubscriptionUsageForkSubscriptionUsageOutput,
   McpListInput,
   McpListOutput,
   McpAddInput,
@@ -964,6 +966,16 @@ const adaptGroupIntegration = (raw: RawClient["server.integration"]) => ({
   },
 })
 
+const EndpointServerForkSubscriptionUsageForkSubscriptionUsage =
+  (raw: RawClient["server.forkSubscriptionUsage"]) => (input?: ServerForkSubscriptionUsageForkSubscriptionUsageInput) =>
+    preserveEffect<ServerForkSubscriptionUsageForkSubscriptionUsageOutput>()(
+      raw["fork.subscriptionUsage"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
+    )
+
+const adaptGroupServerForkSubscriptionUsage = (raw: RawClient["server.forkSubscriptionUsage"]) => ({
+  fork: { subscriptionUsage: EndpointServerForkSubscriptionUsageForkSubscriptionUsage(raw) },
+})
+
 const EndpointMcpList = (raw: RawClient["server.mcp"]) => (input?: McpListInput) =>
   preserveEffect<McpListOutput>()(
     raw["mcp.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
@@ -1544,6 +1556,7 @@ const adaptClient = (raw: RawClient) => ({
   generate: adaptGroupGenerate(raw["server.generate"]),
   provider: adaptGroupProvider(raw["server.provider"]),
   integration: adaptGroupIntegration(raw["server.integration"]),
+  "server.forkSubscriptionUsage": adaptGroupServerForkSubscriptionUsage(raw["server.forkSubscriptionUsage"]),
   mcp: adaptGroupMcp(raw["server.mcp"]),
   credential: adaptGroupCredential(raw["server.credential"]),
   project: adaptGroupProject(raw["server.project"]),

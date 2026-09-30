@@ -33,8 +33,10 @@ import { WorktreeGroup } from "./groups/worktree.js"
 import { VcsGroup } from "./groups/vcs.js"
 import { MigrationGroup } from "./groups/migration.js"
 import { ConfigGroup } from "./groups/config.js"
+import { ForkSubscriptionUsageGroup } from "./groups/fork-subscription-usage.js"
 
 type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
+  | HttpApiGroup.AddMiddleware<typeof ForkSubscriptionUsageGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof AgentGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof PluginGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ModelGroup, LocationId>
@@ -163,6 +165,7 @@ const makeApiFromGroup = <
     .add(GenerateGroup)
     .add(ProviderGroup.middleware(locationMiddleware))
     .add(IntegrationGroup.middleware(locationMiddleware))
+    .add(ForkSubscriptionUsageGroup.middleware(locationMiddleware))
     .add(McpGroup.middleware(locationMiddleware))
     .add(CredentialGroup)
     .add(ProjectGroup.middleware(locationMiddleware))

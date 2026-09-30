@@ -17,6 +17,50 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(LayerNode.compile(LayerNode.group([Credential.node, Bus.node, Database.node])))
 
 describe("Credential", () => {
+  it.effect("conditional secret updates preserve active state, label and method metadata", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      const database = yield* Database.Service
+      const initial = yield* credentials.create({
+        integrationID: Integration.ID.make("openai"),
+        label: "Personal",
+        value: Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "mock-old",
+          refresh: "mock-refresh",
+          expires: 0,
+          metadata: { accountID: "mock-account" },
+        }),
+      })
+      yield* database.db
+        .update(CredentialTable)
+        .set({ active: true, method_id: "mock-method", connector_id: "mock-connector" })
+        .where(eq(CredentialTable.id, initial.id))
+        .run()
+      const refreshed = Credential.OAuth.make({
+        ...initial.value,
+        type: "oauth",
+        methodID: Integration.MethodID.make("chatgpt-browser"),
+        access: "mock-new",
+        refresh: "mock-rotated",
+        expires: 9000000000000,
+      })
+      expect(yield* credentials.compareAndSet(initial, refreshed)).toEqual(refreshed)
+      expect(
+        yield* database.db.select().from(CredentialTable).where(eq(CredentialTable.id, initial.id)).get(),
+      ).toMatchObject({
+        value: refreshed,
+        label: "Personal",
+        active: true,
+        method_id: "mock-method",
+        connector_id: "mock-connector",
+      })
+      expect(
+        yield* credentials.compareAndSet(initial, Credential.Key.make({ type: "key", key: "mock-stale" })),
+      ).toEqual(refreshed)
+    }),
+  )
   it.effect("stores, updates, lists, and removes credentials", () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service

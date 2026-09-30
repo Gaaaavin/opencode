@@ -22,6 +22,7 @@ const failingCredentialNode = makeGlobalNode({
       create: () => Effect.die(new Error("credential persistence failed")),
       activate: () => Effect.void,
       update: () => Effect.void,
+      compareAndSet: () => Effect.undefined,
       remove: () => Effect.void,
     }),
   ),
