@@ -37,8 +37,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
   it.effect("keeps V2 body and modelID fields under providers, not the legacy provider key", () =>
     Effect.sync(() => {
       const openai = {
-        body: { service_tier: "ultrafast" },
-        models: { "gpt-6-astra-custom": { modelID: "gpt-6-astra", body: { service_tier: "ultrafast" } } },
+        body: { service_tier: "priority" },
+        models: { "gpt-6-astra-custom": { modelID: "gpt-6-astra", body: { service_tier: "priority" } } },
       }
       const native = ConfigNormalize.normalize({ providers: { openai } })
       const legacy = ConfigNormalize.normalize({ provider: { openai } })

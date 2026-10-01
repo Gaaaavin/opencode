@@ -10,7 +10,7 @@ import { ConfigProviderPlugin } from "@opencode/core/config/plugin/provider"
 import { Document } from "@opencode/schema/config"
 import { describe, expect } from "bun:test"
 import { ConfigProvider, DateTime, Effect, Layer, Stream } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Credential } from "@opencode/core/credential"
 import { Integration } from "@opencode/core/integration"
 import { Location } from "@opencode/core/location"
@@ -26,7 +26,6 @@ import { AbsolutePath } from "@opencode/core/schema"
 import { SessionModelRequest } from "@opencode/core/session/model-request"
 import { SessionModelTransport } from "@opencode/core/session/model-transport"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
-import { SessionUsage } from "@opencode/core/session/usage"
 import { testEffect } from "../lib/effect"
 import { drain } from "../lib/clock"
 import { PluginTestLayer } from "./fixture"
@@ -61,14 +60,10 @@ const astraFastCost = [
   },
 ] satisfies Model.Info["cost"]
 
-const emptyCatalog = HttpClient.make((request) =>
-  Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ models: [] }))),
-)
-
-const addPlugin = Effect.fn(function* (http = emptyCatalog) {
+const addPlugin = Effect.fn(function* () {
   const plugin = yield* Plugin.Service
   const host = yield* PluginHost.make(plugin)
-  yield* OpenAIPlugin.effect(host).pipe(Effect.provideService(HttpClient.HttpClient, http))
+  yield* OpenAIPlugin.effect(host)
 })
 
 const addGithubCopilotPlugin = Effect.fn(function* () {
@@ -102,152 +97,20 @@ const request = Effect.fn(function* (providerID: Provider.ID, baseURL: string) {
 })
 
 describe("OpenAIPlugin", () => {
-  it.effect("refreshes Ultrafast availability when the active account changes", () =>
-    Effect.gen(function* () {
-      const catalog = yield* Provider.Service
-      const credentials = yield* Credential.Service
-      const models = yield* Model.Service
-      yield* catalog.transform((catalog) => {
-        catalog.models.update(Provider.ID.openai, Model.ID.make("gpt-6-astra"), () => {})
-        catalog.models.update(Provider.ID.openai, Model.ID.make("gpt-5.5-pro"), () => {})
-      })
-      const first = yield* credentials.create({
-        integrationID: Integration.ID.make("openai"),
-        value: Credential.OAuth.make({
-          type: "oauth",
-          methodID: Integration.MethodID.make("chatgpt-browser"),
-          access: "first",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        }),
-      })
-      yield* addPlugin(
-        HttpClient.make((request) =>
-          Effect.succeed(
-            HttpClientResponse.fromWeb(
-              request,
-              Response.json({
-                models:
-                  request.headers.authorization === "Bearer first"
-                    ? ["gpt-6-astra", "gpt-5.5-pro"].map((slug) => ({ slug, service_tiers: [{ id: "ultrafast" }] }))
-                    : [],
-              }),
-            ),
-          ),
-        ),
-      )
-      const id = Model.ID.make("gpt-6-astra-ultrafast")
-      expect(yield* models.get(Provider.ID.openai, id)).toBeDefined()
-      expect(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-5.5-pro-ultrafast"))).toBeUndefined()
-      yield* credentials.create({
-        integrationID: Integration.ID.make("openai"),
-        value: Credential.OAuth.make({
-          type: "oauth",
-          methodID: Integration.MethodID.make("chatgpt-headless"),
-          access: "second",
-          refresh: "refresh",
-          expires: Date.now() + 60_000,
-        }),
-      })
-      yield* drain
-      expect(yield* models.get(Provider.ID.openai, id)).toBeUndefined()
-      yield* credentials.activate(first.id)
-      yield* drain
-      expect(yield* models.get(Provider.ID.openai, id)).toBeDefined()
-      yield* credentials.create({
-        integrationID: Integration.ID.make("openai"),
-        value: Credential.Key.make({ type: "key", key: "test" }),
-      })
-      yield* drain
-      expect(yield* models.get(Provider.ID.openai, id)).toBeUndefined()
-    }),
-  )
-
-  for (const scenario of [
-    {
-      name: "unadvertised tiers",
-      status: 200,
-      body: { models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }] }] },
-    },
-    {
-      name: "another model's tier",
-      status: 200,
-      body: { models: [{ slug: "gpt-6-sol", service_tiers: [{ id: "ultrafast" }] }] },
-    },
-    { name: "missing tiers", status: 200, body: { models: [{ slug: "gpt-6-astra" }] } },
-    { name: "malformed inventory", status: 200, body: { models: "invalid" } },
-    { name: "unavailable inventory", status: 503, body: {} },
-  ]) {
-    it.effect(`does not add Ultrafast for ${scenario.name}`, () =>
-      Effect.gen(function* () {
-        const credentials = yield* Credential.Service
-        yield* credentials.create({
-          integrationID: Integration.ID.make("openai"),
-          value: Credential.OAuth.make({
-            type: "oauth",
-            methodID: Integration.MethodID.make("chatgpt-browser"),
-            access: "test",
-            refresh: "refresh",
-            expires: Date.now() + 60_000,
-          }),
-        })
-        const catalog = yield* Provider.Service
-        yield* catalog.transform((catalog) => {
-          catalog.models.update(Provider.ID.openai, Model.ID.make("gpt-6-astra"), () => {})
-        })
-        yield* addPlugin(
-          HttpClient.make((request) =>
-            Effect.succeed(
-              HttpClientResponse.fromWeb(request, Response.json(scenario.body, { status: scenario.status })),
-            ),
-          ),
-        )
-        const models = yield* Model.Service
-        expect(required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-6-astra"))).enabled).toBe(true)
-        expect(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-6-astra-ultrafast"))).toBeUndefined()
-      }),
-    )
-  }
-
-  it.live(
-    "bounds ChatGPT catalog discovery when the server does not respond",
-    () =>
-      Effect.gen(function* () {
-        const credentials = yield* Credential.Service
-        yield* credentials.create({
-          integrationID: Integration.ID.make("openai"),
-          value: Credential.OAuth.make({
-            type: "oauth",
-            methodID: Integration.MethodID.make("chatgpt-browser"),
-            access: "test",
-            refresh: "refresh",
-            expires: Date.now() + 60_000,
-          }),
-        })
-        yield* addPlugin(HttpClient.make(() => Effect.never))
-        const models = yield* Model.Service
-        expect(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-6-astra-ultrafast"))).toBeUndefined()
-      }),
-    5000,
-  )
-
   for (const method of ["chatgpt-browser", "chatgpt-headless", "key"]) {
-    for (const mode of [undefined, "priority", "ultrafast", "provider-body", "model-body"]) {
-      if (method === "key" && mode === "ultrafast") continue
-      const tier = mode === "provider-body" || mode === "model-body" ? "ultrafast" : mode
+    for (const mode of [undefined, "priority", "provider-body", "model-body"]) {
+      const tier = mode === "provider-body" || mode === "model-body" ? "priority" : mode
       it.effect(`prices and prepares ${method} ${mode ?? "standard"} on HTTP and WebSocket`, () =>
         Effect.gen(function* () {
           const catalog = yield* Provider.Service
           const models = yield* Model.Service
           const credentials = yield* Credential.Service
           const id = Model.ID.make(
-            mode === "ultrafast"
-              ? "gpt-6-astra-ultrafast"
-              : mode === "priority"
-                ? "gpt-6-astra-fast"
-                : mode === "model-body"
-                  ? "gpt-6-astra-custom"
-                  : "gpt-6-astra",
+            mode === "priority"
+              ? "gpt-6-astra-fast"
+              : mode === "model-body"
+                ? "gpt-6-astra-custom"
+                : "gpt-6-astra",
           )
           yield* catalog.transform((catalog) => {
             catalog.update(Provider.ID.openai, (draft) => {
@@ -255,7 +118,7 @@ describe("OpenAIPlugin", () => {
             })
             catalog.models.update(
               Provider.ID.openai,
-              mode === "ultrafast" || mode === "model-body" ? Model.ID.make("gpt-6-astra") : id,
+              mode === "model-body" ? Model.ID.make("gpt-6-astra") : id,
               (draft) => {
                 draft.modelID = Model.ID.make("gpt-6-astra")
                 draft.name = "GPT-6 Astra"
@@ -279,25 +142,7 @@ describe("OpenAIPlugin", () => {
                     metadata: { accountID: "acct_test" },
                   }),
           })
-          yield* addPlugin(
-            HttpClient.make((request) =>
-              Effect.sync(() => {
-                expect(method).not.toBe("key")
-                expect(request.url).toBe("https://chatgpt.com/backend-api/codex/models?client_version=0.300.0")
-                expect(request.headers).toMatchObject({
-                  authorization: "Bearer chatgpt-token",
-                  "chatgpt-account-id": "acct_test",
-                  originator: "opencode",
-                })
-                return HttpClientResponse.fromWeb(
-                  request,
-                  Response.json({
-                    models: [{ slug: "gpt-6-astra", service_tiers: [{ id: "priority" }, { id: "ultrafast" }] }],
-                  }),
-                )
-              }),
-            ),
-          )
+          yield* addPlugin()
           if (mode === "provider-body" || mode === "model-body") {
             const plugin = yield* Plugin.Service
             const host = yield* PluginHost.make(plugin)
@@ -310,12 +155,12 @@ describe("OpenAIPlugin", () => {
                       providers: {
                         openai:
                           mode === "provider-body"
-                            ? { body: { service_tier: "ultrafast" } }
+                            ? { body: { service_tier: "priority" } }
                             : {
                                 models: {
                                   "gpt-6-astra-custom": {
                                     modelID: Model.ID.make("gpt-6-astra"),
-                                    body: { service_tier: "ultrafast" },
+                                    body: { service_tier: "priority" },
                                   },
                                 },
                               },
@@ -330,49 +175,7 @@ describe("OpenAIPlugin", () => {
           const model = required(yield* resolver.resolve(Model.Ref.make({ providerID: Provider.ID.openai, id })))
           expect(required(yield* models.get(Provider.ID.openai, id)).limit.output).toBe(128_000)
           expect(String(model.model.id)).toBe("gpt-6-astra")
-          if (mode === "ultrafast") {
-            expect(required(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-6-astra"))).cost).toEqual(
-              astraCost,
-            )
-            expect(required(yield* models.get(Provider.ID.openai, id)).name).toBe("GPT-6 Astra Ultrafast")
-            expect(model.cost).toEqual([
-              {
-                input: Money.USDPerMillionTokens.make(60),
-                output: Money.USDPerMillionTokens.make(300),
-                cache: { read: Money.USDPerMillionTokens.make(6), write: Money.USDPerMillionTokens.make(75) },
-              },
-              {
-                tier: { type: "context", size: 272_000 },
-                input: Money.USDPerMillionTokens.make(120),
-                output: Money.USDPerMillionTokens.make(450),
-                cache: { read: Money.USDPerMillionTokens.make(12), write: Money.USDPerMillionTokens.make(150) },
-              },
-            ])
-            expect(
-              Number(
-                SessionUsage.calculateCost(model.cost, {
-                  input: 270_000,
-                  output: 1000,
-                  reasoning: 1000,
-                  cache: { read: 1000, write: 1000 },
-                }),
-              ),
-            ).toBeCloseTo(16.881)
-            expect(
-              Number(
-                SessionUsage.calculateCost(model.cost, {
-                  input: 270_001,
-                  output: 1000,
-                  reasoning: 1000,
-                  cache: { read: 1000, write: 1000 },
-                }),
-              ),
-            ).toBeCloseTo(33.46212)
-            expect(model.limit).toEqual({ context: 400_000, input: 272_000, output: 128_000 })
-          }
-          if (mode !== "ultrafast") expect(model.cost).toEqual(mode === "priority" ? astraFastCost : astraCost)
-          if (method === "key")
-            expect(yield* models.get(Provider.ID.openai, Model.ID.make("gpt-6-astra-ultrafast"))).toBeUndefined()
+          expect(model.cost).toEqual(mode === "priority" ? astraFastCost : astraCost)
           const requests = yield* SessionModelRequest.Service
           const prepared = yield* requests.primary({
             session: Session.Info.make({
@@ -414,10 +217,7 @@ describe("OpenAIPlugin", () => {
                     ? {
                         execute: (exchange) =>
                           Effect.gen(function* () {
-                            if (tier && method !== "key")
-                              expect(exchange.connect.headers["x-codex-routing-hint"]).toBe(
-                                `model=gpt-6-astra;tier=${tier}`,
-                              )
+                            expect(exchange.connect.headers).not.toHaveProperty("x-codex-routing-hint")
                             check(JSON.parse((yield* exchange.driver.create(undefined)).message))
                             return {
                               frames: transport === "fallback" ? exchange.fallback() : Stream.make(completed),
@@ -436,8 +236,7 @@ describe("OpenAIPlugin", () => {
                           Effect.gen(function* () {
                             expect(transport).not.toBe("websocket")
                             const http = yield* HttpClientRequest.toWeb(sent).pipe(Effect.orDie)
-                            if (tier && method !== "key")
-                              expect(http.headers.get("x-codex-routing-hint")).toBe(`model=gpt-6-astra;tier=${tier}`)
+                            expect(http.headers.has("x-codex-routing-hint")).toBe(false)
                             check(JSON.parse(yield* Effect.promise(() => http.text())))
                             return HttpClientResponse.fromWeb(
                               sent,

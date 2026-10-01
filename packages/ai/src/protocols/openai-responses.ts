@@ -337,20 +337,10 @@ export const transport: typeof channel = {
       return channel.prepare(input)
     // Codex rejects output caps, including raw body overrides, on both HTTP and WebSocket requests.
     const { max_output_tokens: _maxOutputTokens, ...body } = input.request.http?.body ?? {}
-    const tier = body.service_tier ?? input.body.service_tier
     return channel.prepare({
       ...input,
       body: { ...input.body, max_output_tokens: undefined },
-      request: LLMRequest.update(input.request, {
-        http: {
-          ...input.request.http,
-          body,
-          headers: {
-            ...input.request.http?.headers,
-            ...(typeof tier === "string" ? { "x-codex-routing-hint": `model=${input.body.model};tier=${tier}` } : {}),
-          },
-        },
-      }),
+      request: LLMRequest.update(input.request, { http: { ...input.request.http, body } }),
     })
   },
 }
